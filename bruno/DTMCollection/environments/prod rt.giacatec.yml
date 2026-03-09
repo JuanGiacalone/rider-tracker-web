@@ -4,3 +4,5 @@ variables:
     value: rt.giacatec.com.ar
   - name: user
     value: giacatec
+  - secret: true
+    name: password

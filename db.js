@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-const dbPath = path.join(__dirname, 'database.sqlite');
+const dbPath = path.join(__dirname, 'data/database.sqlite');
 const db = new Database(dbPath);
 
 // Enable foreign keys
