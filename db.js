@@ -18,7 +18,7 @@ function initDb() {
             name TEXT NOT NULL UNIQUE,
             active BOOLEAN DEFAULT 1,
             last_payment_date DATE,
-            endpoint TEXT,
+            endpoint TEXT
         )
     `).run();
 

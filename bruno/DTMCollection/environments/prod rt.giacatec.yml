@@ -1,0 +1,6 @@
+name: prod rt.giacatec
+variables:
+  - name: baseUrl
+    value: rt.giacatec.com.ar
+  - name: user
+    value: giacatec
