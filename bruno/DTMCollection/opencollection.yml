@@ -1,0 +1,13 @@
+opencollection: 1.0.0
+
+info:
+  name: DTMCollection
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git
+variables:
+  baseUrl: http://localhost:3001/api
+  adminToken: ""

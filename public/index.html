@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RiderTracker</title>
+    <link rel="icon" href="favicon.png">
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // Suppress specific Leaflet deprecation warnings in Firefox
+        (function () {
+            const originalWarn = console.warn;
+            console.warn = function (message) {
+                if (typeof message === 'string' &&
+                    (message.includes('mozPressure') || message.includes('mozInputSource'))) {
+                    return;
+                }
+                originalWarn.apply(console, arguments);
+            };
+        })();
+    </script>
+</head>
+
+<body>
+    <!-- Login Container -->
+    <div id="login-container">
+        <form class="login-form" id="login-form">
+            <div class="login-logo-container">
+                <img src="favicon.png" alt="RiderTracker" class="login-logo">
+            </div>
+            <h1>RiderTracker Admin</h1>
+            <div class="form-group">
+                <label for="username">Usuario</label>
+                <input type="text" id="username" placeholder="Usuario" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Contraseña</label>
+                <input type="password" id="password" placeholder="Contraseña" required>
+            </div>
+            <button type="submit">Iniciar Sesión</button>
+            <div class="login-error" id="login-error"></div>
+        </form>
+    </div>
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <div class="logo-container">
+                <img src="favicon.png" alt="RiderTracker" class="header-logo">
+                <h2>RiderTracker</h2>
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot loading" id="status-dot"></div>
+                <span class="status-text" id="status-label">Cargando...</span>
+            </div>
+        </div>
+
+        <div class="header-right">
+            <div class="rider-count-badge">
+                🏍️ <span id="rider-count">0</span> Conductores
+            </div>
+            <select id="header-store-filter" class="store-filter-select">
+                <option value="all">Todas las sucursales</option>
+            </select>
+
+            <div class="top-right-actions" id="top-right-actions">
+                <div class="settings-container" id="admin-settings">
+                    <div class="settings-icon" id="settings-trigger">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path
+                                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+                            </path>
+                        </svg>
+                    </div>
+                    <div class="settings-menu" id="settings-menu">
+                        <div class="menu-item" id="menu-add-rider">
+                            <span>➕ Agregar Repartidor</span>
+                        </div>
+                        <div class="menu-item logout-option" id="menu-logout">
+                            <span>🚪 Cerrar Sesión</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Rider Modal -->
+    <div id="rider-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Nuevo Repartidor</h3>
+                <span class="close-modal" id="close-modal">&times;</span>
+            </div>
+            <form id="add-rider-form">
+                <div class="form-group">
+                    <label for="new-username">Usuario</label>
+                    <input type="text" id="new-username" placeholder="Nombre del repartidor" required>
+                </div>
+                <div class="form-group">
+                    <label for="new-password">Contraseña</label>
+                    <input type="password" id="new-password" placeholder="••••••••" required>
+                </div>
+                <div class="form-group">
+                    <label for="store-id">Sucursal</label>
+                    <select id="store-id" class="form-input" required>
+                        <option value="">Seleccione una sucursal</option>
+                    </select>
+                </div>
+                <button type="submit" class="add-rider-btn" style="width: 100%">Crear Repartidor</button>
+                <div id="rider-form-feedback" class="form-feedback"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div class="loading-spinner" id="loading-spinner">
+        <div class="spinner"></div>
+    </div>
+
+    <!-- No Riders Message -->
+    <div class="no-riders" id="no-riders" style="display: none;">
+        <h3>Sin Conductores Activos</h3>
+        <p>Esperando que los conductores inicien sus turnos...</p>
+    </div>
+
+    <!-- Persistent Rider Badge -->
+    <div id="persistent-rider-badge">
+        <span class="badge-icon">🏍️</span>
+        <span id="badge-count">0</span>
+    </div>
+
+    <!-- Developer Credits -->
+    <div class="developer-credits">
+        Desarrollado por <a href="https://giacatec.com.ar" target="_blank">Giacatec</a>
+    </div>
+
+    <script>
+        // Configuration
+        const API_URL = window.location.origin;
+        const DEFAULT_LAT = -38.0055; // Mar del Plata
+        const DEFAULT_LNG = -57.5426;
+
+        const DEFAULT_ZOOM = 12;
+
+        // State
+        let map = null;
+        let socket = null;
+        let riderMarkers = new Map(); // Map<riderId, {marker, storeId}>
+        let storeMarkers = new Map(); // Map<storeId, marker>
+        let authToken = null;
+        let isConnected = false;
+        let currentStoreFilter = "all";
+
+        // Header Visibility Logic
+        let headerTimer = null;
+        let isMenuOpen = false;
+        let isModalOpen = false;
+
+        // ============ SPINNER MANAGEMENT ============
+
+        function showSpinner() {
+            const spinner = document.getElementById("loading-spinner");
+            spinner.style.display = "block";
+            setTimeout(() => spinner.style.opacity = "1", 10);
+        }
+
+        function hideSpinner() {
+            const spinner = document.getElementById("loading-spinner");
+            spinner.style.opacity = "0";
+            setTimeout(() => {
+                spinner.style.display = "none";
+            }, 500);
+        }
+
+        // ============ HEADER MANAGEMENT ============
+
+        function showHeader() {
+            const header = document.querySelector(".header");
+            header.classList.remove("hidden");
+            resetHeaderTimer();
+        }
+
+        function hideHeader() {
+            const header = document.querySelector(".header");
+            if (!isMenuOpen && !isModalOpen && authToken) {
+                header.classList.add("hidden");
+            }
+        }
+
+        function resetHeaderTimer() {
+            if (headerTimer) clearTimeout(headerTimer);
+            headerTimer = setTimeout(hideHeader, 3000);
+        }
+
+        // Trigger header on mouse move near top
+        document.addEventListener("mousemove", (e) => {
+            if (e.clientY < 50 && authToken) {
+                showHeader();
+            }
+        });
+
+        // ============ SESSION PERSISTENCE ============
+
+        window.addEventListener("DOMContentLoaded", () => {
+            const savedToken = localStorage.getItem("adminToken");
+            if (savedToken) {
+                showSpinner();
+                authToken = savedToken;
+                document.getElementById("login-container").classList.add("hidden");
+                document.getElementById("top-right-actions").style.display = "block";
+                document.querySelector(".header").style.display = "flex";
+                document.getElementById("persistent-rider-badge").style.display = "flex";
+                initializeMap();
+                connectSocket();
+                fetchStores();
+                resetHeaderTimer(); // Start auto-hide
+            }
+        });
+
+        // ============ STORES MANAGEMENT ============
+
+        async function fetchStores() {
+            try {
+                const response = await fetch(`${API_URL}/api/stores`, {
+                    headers: { "Authorization": `Bearer ${authToken}` }
+                });
+                const stores = await response.json();
+
+                const storeSelect = document.getElementById("store-id");
+                const headerFilter = document.getElementById("header-store-filter");
+
+                // Reset selectors
+                storeSelect.innerHTML = '<option value="">Seleccione una sucursal</option>';
+                headerFilter.innerHTML = '<option value="all">Todas las sucursales</option>';
+
+                stores.forEach(store => {
+                    // Form select
+                    const option = document.createElement("option");
+                    option.value = store.id;
+                    option.textContent = store.name;
+                    storeSelect.appendChild(option);
+
+                    // Header filter
+                    const filterOption = document.createElement("option");
+                    filterOption.value = store.id;
+                    filterOption.textContent = store.name;
+                    headerFilter.appendChild(filterOption);
+
+                    // Map markers
+                    if (store.lat && store.lng) {
+                        const storeIcon = L.icon({
+                            iconUrl: 'store.svg',
+                            iconSize: [36, 36],
+                            iconAnchor: [18, 18],
+                            popupAnchor: [0, -18]
+                        });
+
+                        const marker = L.marker([store.lat, store.lng], { icon: storeIcon })
+                            .bindPopup(`<strong>Sucursal: ${store.name}</strong>`);
+
+                        storeMarkers.set(String(store.id), marker);
+                        marker.addTo(map);
+                    }
+                });
+            } catch (error) {
+                console.error("Error fetching stores:", error);
+            }
+        }
+
+        // ============ AUTHENTICATION ============
+
+        document.getElementById("login-form").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const username = document.getElementById("username").value;
+            const password = document.getElementById("password").value;
+
+            showSpinner();
+
+            try {
+                const response = await fetch(`${API_URL}/api/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username: username, password: password }),
+                });
+
+                const data = await response.json();
+                if (data.token) {
+                    authToken = data.token;
+                    localStorage.setItem("adminToken", authToken);
+                    localStorage.setItem("tenantId", data.tenantId);
+                    document.getElementById("login-container").classList.add("hidden");
+                    document.getElementById("top-right-actions").style.display = "block";
+                    document.querySelector(".header").style.display = "flex";
+                    document.getElementById("persistent-rider-badge").style.display = "flex";
+                    initializeMap();
+                    connectSocket();
+                    fetchStores();
+                    resetHeaderTimer(); // Start auto-hide
+                } else {
+                    document.getElementById("login-error").textContent = "Error de autenticación";
+                }
+            } catch (error) {
+                console.error("Login error:", error);
+                document.getElementById("login-error").textContent = "Error de conexión";
+            }
+        });
+
+        // ============ RIDER MANAGEMENT UI ============
+
+        const modal = document.getElementById("rider-modal");
+        const settingsTrigger = document.getElementById("settings-trigger");
+        const settingsMenu = document.getElementById("settings-menu");
+        const menuAddRider = document.getElementById("menu-add-rider");
+        const menuLogout = document.getElementById("menu-logout");
+        const closeModalBtn = document.getElementById("close-modal");
+        const riderForm = document.getElementById("add-rider-form");
+        const feedback = document.getElementById("rider-form-feedback");
+
+        // Toggle Settings Menu
+        settingsTrigger.onclick = (e) => {
+            e.stopPropagation();
+            settingsMenu.classList.toggle("show");
+            isMenuOpen = settingsMenu.classList.contains("show");
+            if (isMenuOpen) {
+                if (headerTimer) clearTimeout(headerTimer);
+            } else {
+                resetHeaderTimer();
+            }
+        };
+
+        // Filter Handling
+        document.getElementById("header-store-filter").onchange = (e) => {
+            currentStoreFilter = e.target.value;
+            applyFilters();
+        };
+
+        function applyFilters() {
+            riderMarkers.forEach((data, riderId) => {
+                const isVisible = currentStoreFilter === "all" || String(data.storeId) === String(currentStoreFilter);
+                if (isVisible) {
+                    if (!map.hasLayer(data.marker)) {
+                        data.marker.addTo(map);
+                    }
+                } else {
+                    if (map.hasLayer(data.marker)) {
+                        map.removeLayer(data.marker);
+                    }
+                }
+            });
+            updateRiderCount();
+
+            // Sync store markers with filter
+            storeMarkers.forEach((marker, storeId) => {
+                const isVisible = currentStoreFilter === "all" || String(storeId) === String(currentStoreFilter);
+                if (isVisible) {
+                    if (!map.hasLayer(marker)) marker.addTo(map);
+                } else {
+                    if (map.hasLayer(marker)) map.removeLayer(marker);
+                }
+            });
+        }
+
+        // Close menu when clicking outside
+        document.addEventListener("click", () => {
+            settingsMenu.classList.remove("show");
+            isMenuOpen = false;
+            resetHeaderTimer();
+        });
+
+        settingsMenu.onclick = (e) => {
+            e.stopPropagation();
+        };
+
+        menuAddRider.onclick = () => {
+            modal.style.display = "flex";
+            isModalOpen = true;
+            settingsMenu.classList.remove("show");
+            isMenuOpen = false;
+            if (headerTimer) clearTimeout(headerTimer);
+            feedback.textContent = "";
+            riderForm.reset();
+        };
+
+        menuLogout.onclick = () => {
+            handleLogout();
+        };
+
+        closeModalBtn.onclick = () => {
+            modal.style.display = "none";
+            isModalOpen = false;
+            resetHeaderTimer();
+        };
+
+        window.onclick = (event) => {
+            if (event.target == modal) {
+                modal.style.display = "none";
+                isModalOpen = false;
+                resetHeaderTimer();
+            }
+        };
+
+        riderForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const username = document.getElementById("new-username").value;
+            const password = document.getElementById("new-password").value;
+            const storeId = document.getElementById("store-id").value;
+            const tenantId = localStorage.getItem("tenantId");
+
+            feedback.textContent = "Creando...";
+            feedback.className = "form-feedback";
+
+            try {
+                const response = await fetch(`${API_URL}/api/riders`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({ username, password, storeId, tenantId }),
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    feedback.textContent = "¡Repartidor creado con éxito!";
+                    feedback.className = "form-feedback feedback-success";
+                    setTimeout(() => {
+                        modal.style.display = "none";
+                        isModalOpen = false;
+                        resetHeaderTimer();
+                    }, 1500);
+                } else {
+                    feedback.textContent = data.error || "Error al crear repartidor";
+                    feedback.className = "form-feedback feedback-error";
+                }
+            } catch (error) {
+                console.error("Add rider error:", error);
+                feedback.textContent = "Error de conexión";
+                feedback.className = "form-feedback feedback-error";
+            }
+        });
+
+        function handleLogout() {
+            authToken = null;
+            localStorage.removeItem("adminToken");
+            if (socket) socket.disconnect();
+            document.getElementById("login-container").classList.remove("hidden");
+            document.getElementById("top-right-actions").style.display = "none";
+            document.querySelector(".header").style.display = "none";
+            document.getElementById("persistent-rider-badge").style.display = "none";
+            document.getElementById("no-riders").style.display = "none";
+            if (map) map.remove();
+            riderMarkers.clear();
+            storeMarkers.clear();
+        }
+
+        // ============ MAP INITIALIZATION ============
+
+        function initializeMap() {
+            map = L.map("map", { zoomControl: false }).setView([DEFAULT_LAT, DEFAULT_LNG], DEFAULT_ZOOM);
+
+            L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+                attribution: "&copy; OpenStreetMap contributors",
+                maxZoom: 19,
+            }).addTo(map);
+        }
+
+        // ============ SOCKET.IO CONNECTION ============
+
+        function connectSocket() {
+            if (socket) {
+                console.log("Closing existing socket connection...");
+                socket.disconnect();
+            }
+            socket = io(API_URL, {
+                auth: { token: authToken },
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                reconnectionAttempts: 5,
+            });
+
+            socket.on("connect", () => {
+                console.log("Connected to server");
+                isConnected = true;
+                updateStatus("Conectado", "connected");
+                hideSpinner();
+            });
+
+            socket.on("disconnect", () => {
+                console.log("Disconnected from server");
+                isConnected = false;
+                updateStatus("Desconectado", "disconnected");
+            });
+
+            socket.on("initial-state", (riders) => {
+                console.log("Initial state received:", riders);
+                riderMarkers.clear();
+                riders.forEach((rider) => addOrUpdateMarker(rider));
+                updateRiderCount();
+            });
+
+            socket.on("rider-update", (rider) => {
+                console.log("Rider update:", rider);
+                addOrUpdateMarker(rider);
+                updateRiderCount();
+            });
+
+            socket.on("rider-offline", (data) => {
+                console.log("Rider offline:", data.riderId);
+                removeMarker(data.riderId);
+                updateRiderCount();
+            });
+
+            socket.on("error", (error) => {
+                console.error("Socket error:", error);
+                updateStatus("Error de conexión", "disconnected");
+            });
+        }
+
+        // ============ MARKER MANAGEMENT ============
+
+        function addOrUpdateMarker(rider) {
+            const { riderId, lat, lng, ts, storeId } = rider;
+
+            if (!map) return;
+
+            const timeAgo = getTimeAgo(ts);
+
+            const markerHtml = `
+                <div class="custom-marker">
+                    <span class="marker-label">${riderId}</span>
+                    <img src="moto.svg" class="marker-icon-img">
+                </div>
+            `;
+
+            const customIcon = L.divIcon({
+                html: markerHtml,
+                className: 'custom-div-icon',
+                iconSize: [40, 50],
+                iconAnchor: [20, 50],
+                popupAnchor: [0, -50]
+            });
+
+            if (riderMarkers.has(riderId)) {
+                // Update existing marker
+                const data = riderMarkers.get(riderId);
+                data.storeId = storeId; // Update storeId in case it changed
+                data.marker.setLatLng([lat, lng]);
+                data.marker.setIcon(customIcon);
+                data.marker.setPopupContent(
+                    `<strong>Conductor: ${riderId}</strong><br>Última actualización: ${timeAgo}`
+                );
+            } else {
+                // Create new marker
+                const marker = L.marker([lat, lng], {
+                    icon: customIcon
+                })
+                    .bindPopup(`<strong>Conductor: ${riderId}</strong><br>Última actualización: ${timeAgo}`);
+
+                riderMarkers.set(riderId, { marker, storeId });
+
+                // Add to map only if it matches current filter
+                const isVisible = currentStoreFilter === "all" || String(storeId) === String(currentStoreFilter);
+                if (isVisible) {
+                    marker.addTo(map);
+                }
+            }
+        }
+
+        function removeMarker(riderId) {
+            if (riderMarkers.has(riderId)) {
+                const data = riderMarkers.get(riderId);
+                map.removeLayer(data.marker);
+                riderMarkers.delete(riderId);
+            }
+        }
+
+        // ============ UTILITY FUNCTIONS ============
+
+        function getTimeAgo(timestamp) {
+            const now = Date.now();
+            const diff = now - timestamp;
+            const seconds = Math.floor(diff / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+
+            if (seconds < 60) return "Hace unos segundos";
+            if (minutes < 60) return `Hace ${minutes} minuto${minutes > 1 ? "s" : ""}`;
+            if (hours < 24) return `Hace ${hours} hora${hours > 1 ? "s" : ""}`;
+            return "Hace más de 1 día";
+        }
+
+        function updateStatus(text, status) {
+            document.getElementById("status-label").textContent = text;
+            const dot = document.getElementById("status-dot");
+            dot.className = `status-dot ${status === "connected" ? "connected" : ""}`;
+        }
+
+        function updateRiderCount() {
+            let count = 0;
+            if (currentStoreFilter === "all") {
+                count = riderMarkers.size;
+            } else {
+                riderMarkers.forEach(data => {
+                    if (String(data.storeId) === String(currentStoreFilter)) {
+                        count++;
+                    }
+                });
+            }
+
+            document.getElementById("rider-count").textContent = count;
+            document.getElementById("badge-count").textContent = count;
+
+            if (count === 0) {
+                document.getElementById("no-riders").style.display = "block";
+            } else {
+                document.getElementById("no-riders").style.display = "none";
+            }
+        }
+
+        // ============ PERIODIC UPDATES ============
+
+        // Update "time ago" display every 30 seconds
+        setInterval(() => {
+            riderMarkers.forEach((marker, riderId) => {
+                // Refresh popup content to update time ago
+                if (marker.isPopupOpen()) {
+                    const popup = marker.getPopup();
+                    // This would require storing the timestamp, which we'll do in a future update
+                }
+            });
+        }, 30000);
+    </script>
