@@ -7,6 +7,8 @@ const helmet = require("helmet");
 const cors = require("cors");
 const path = require("path");
 const db = require("./db");
+const sqlite3 = require('sqlite3').verbose();
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -34,7 +36,7 @@ function generateRiderId(username) {
     return `rider_${username}`;
 }
 
-// JWT verification middleware
+// JWT verification utility
 function verifyToken(token) {
     try {
         return jwt.verify(token, process.env.JWT_SECRET);
@@ -42,6 +44,70 @@ function verifyToken(token) {
         return null;
     }
 }
+
+// Authentication Middleware
+const authenticateJWT = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+
+    const token = authHeader.split(" ")[1];
+    const decoded = verifyToken(token);
+
+    if (!decoded) {
+        return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    req.user = decoded;
+    next();
+};
+
+// Admin Authorization Middleware
+const isAdmin = (req, res, next) => {
+    if (!req.user || !req.user.isAdmin) {
+        return res.status(403).json({ error: "Unauthorized: Admin access required" });
+    }
+    next();
+};
+
+app.get('/admin/db-stats', authenticateJWT, isAdmin, (req, res) => {
+    const dbPath = path.join(__dirname, 'app/data/database.sqlite');
+
+    fs.stat(dbPath, (err, stats) => {
+        if (err) return res.status(404).json({ error: "DB not found" });
+
+        res.json({
+            lastModified: stats.mtime, // Last modification time
+            size: (stats.size / 1024 / 1024).toFixed(2) + " MB"
+        });
+    });
+});
+
+app.get('/admin/download-db', authenticateJWT, isAdmin, (req, res) => {
+    const liveDbPath = path.join(__dirname, 'app/data/database.sqlite');
+    const backupPath = path.join(__dirname, 'app/data/backup_temp.sqlite');
+
+    // 1. Connect to the live database
+    const db = new sqlite3.Database(liveDbPath);
+
+    // 2. Run VACUUM INTO to create a consistent snapshot
+    // This safely ignores any active locks or WAL files
+    db.run(`VACUUM INTO ?`, [backupPath], (err) => {
+        db.close(); // Close connection to live DB
+
+        if (err) {
+            console.error(err);
+            return res.status(500).send("Backup failed.");
+        }
+
+        // 3. Serve the fresh snapshot
+        res.download(backupPath, 'database-backup.sqlite', (downloadErr) => {
+            // 4. Cleanup: Delete the temp file after download finishes
+            fs.unlink(backupPath, (unlinkErr) => {
+                if (unlinkErr) console.error("Cleanup error:", unlinkErr);
+            });
+        });
+    });
+});
 
 // ============ REST API ENDPOINTS ============
 
@@ -67,9 +133,9 @@ app.post("/api/login", (req, res) => {
     }
 
     const riderId = generateRiderId(username);
-    const isAdmin = user.is_admin === 1;
+    const isUserAdmin = user.is_admin === 1;
     const token = jwt.sign(
-        { username, riderId, isAdmin: isAdmin, tenantId: user.tenant_id, tenantName: user.tenant_name },
+        { username, riderId, isAdmin: isUserAdmin, tenantId: user.tenant_id, tenantName: user.tenant_name },
         process.env.JWT_SECRET,
         { expiresIn: "24h" }
     );
@@ -85,19 +151,9 @@ app.get("/api/health", (req, res) => {
     res.json({ status: "ok", activeRiders: activeRiders.size });
 });
 
-app.get("/api/stores", (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
-
-    const token = authHeader.split(" ")[1];
-    const decoded = verifyToken(token);
-
-    if (!decoded || !decoded.isAdmin) {
-        return res.status(403).json({ error: "Unauthorized: Admin access required" });
-    }
-
+app.get("/api/stores", authenticateJWT, isAdmin, (req, res) => {
     try {
-        const stores = db.prepare('SELECT id, name, lat, lng FROM stores WHERE tenant_id = ?').all(decoded.tenantId);
+        const stores = db.prepare('SELECT id, name, lat, lng FROM stores WHERE tenant_id = ?').all(req.user.tenantId);
         res.json(stores);
     } catch (error) {
         console.error("Error fetching stores:", error);
@@ -106,17 +162,7 @@ app.get("/api/stores", (req, res) => {
 });
 
 // POST /api/stores - Add a new store
-app.post("/api/stores", (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
-
-    const token = authHeader.split(" ")[1];
-    const decoded = verifyToken(token);
-
-    if (!decoded || !decoded.isAdmin) {
-        return res.status(403).json({ error: "Unauthorized: Admin access required" });
-    }
-
+app.post("/api/stores", authenticateJWT, isAdmin, (req, res) => {
     const { tenantId, name, lat, lng } = req.body;
 
     if (!name) {
@@ -143,18 +189,8 @@ app.post("/api/stores", (req, res) => {
 });
 
 // POST /api/location - Background location updates
-app.post("/api/location", (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
-
-    const token = authHeader.split(" ")[1];
-    const decoded = verifyToken(token);
-
-    if (!decoded) {
-        return res.status(401).json({ error: "Invalid token" });
-    }
-
-    const { riderId, tenantId, tenantName } = decoded;
+app.post("/api/location", authenticateJWT, (req, res) => {
+    const { riderId, tenantId, tenantName } = req.user;
     const { lat, lng, ts, storeId } = req.body;
 
     if (typeof lat !== "number" || typeof lng !== "number") {
@@ -185,17 +221,8 @@ app.post("/api/location", (req, res) => {
 });
 
 // POST /api/riders - Add a new rider
-app.post("/api/riders", (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
-
-    const token = authHeader.split(" ")[1];
-    const decoded = verifyToken(token);
-
-    if (!decoded || !decoded.isAdmin) {
-        return res.status(403).json({ error: "Unauthorized: Admin access required" });
-    }
-    const { username, password, storeId, isAdmin, tenantId } = req.body;
+app.post("/api/riders", authenticateJWT, isAdmin, (req, res) => {
+    const { username, password, storeId, isAdmin: newIsAdmin, tenantId } = req.body;
 
     if (!username || !password || !storeId) {
         return res.status(400).json({ error: "Username, password and storeId are required" });
@@ -203,7 +230,7 @@ app.post("/api/riders", (req, res) => {
     try {
         const result = db.prepare(
             'INSERT INTO users (tenant_id, username, password, is_admin, store_id) VALUES (?, ?, ?, ?, ?)'
-        ).run(tenantId, username, password, isAdmin ? 1 : 0, storeId);
+        ).run(tenantId, username, password, newIsAdmin ? 1 : 0, storeId);
 
         res.status(201).json({ success: true, userId: result.lastInsertRowid });
     } catch (error) {
@@ -217,6 +244,10 @@ app.post("/api/riders", (req, res) => {
 
 // Serve static files (admin interface)
 app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/admin/db", authenticateJWT, isAdmin, (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "db.html"));
+});
 
 // ============ SOCKET.IO EVENTS ============
 

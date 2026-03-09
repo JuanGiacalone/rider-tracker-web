@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Export Tool</title>
+    <link rel="stylesheet" href="db-style.css">
+</head>
+
+<body>
+    <div class="admin-container">
+        <h2>System Administration</h2>
+        <p>Export the current state of the SQLite database.</p>
+
+        <div class="card">
+            <div class="file-info">
+                <strong>File:</strong> <code>database.sqlite</code><br>
+                <strong>Last Modified:</strong> <span id="lastUpdated">Loading...</span><br>
+                <strong>Current Size:</strong> <span id="dbSize">--</span>
+            </div>
+            <button id="downloadBtn" class="btn-primary">Generate & Download</button>
+            <p id="statusMessage"></p>
+        </div>
+    </div>
+    <script src="db-script.js"></script>
+</body>
+
+</html>
