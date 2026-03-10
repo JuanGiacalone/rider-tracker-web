@@ -47,14 +47,34 @@ function verifyToken(token) {
 
 // Authentication Middleware
 const authenticateJWT = (req, res, next) => {
+    let token = null;
+
+    // 1. Check Authorization header
     const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+    if (authHeader) {
+        token = authHeader.split(" ")[1];
+    }
 
-    const token = authHeader.split(" ")[1];
+    // 2. Check query parameter (e.g., for downloads)
+    if (!token && req.query.token) {
+        token = req.query.token;
+    }
+
+    // 3. Check cookies (simple parser helper)
+    if (!token && req.headers.cookie) {
+        const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
+            const [name, value] = cookie.trim().split('=');
+            acc[name] = value;
+            return acc;
+        }, {});
+        token = cookies.authToken;
+    }
+
+    if (!token) return res.status(401).json({ error: "401" });
+
     const decoded = verifyToken(token);
-
     if (!decoded) {
-        return res.status(401).json({ error: "Invalid or expired token" });
+        return res.status(401).json({ error: "401" });
     }
 
     req.user = decoded;
@@ -69,8 +89,16 @@ const isAdmin = (req, res, next) => {
     next();
 };
 
-app.get('/admin/db-stats', authenticateJWT, isAdmin, (req, res) => {
-    const dbPath = path.join(__dirname, 'app/data/database.sqlite');
+// Developer Authorization Middleware (Restricts sensitive DB tools to 'giacatec')
+const isDeveloper = (req, res, next) => {
+    if (!req.user || req.user.username !== 'giacatec') {
+        return res.status(403).json({ error: "403" });
+    }
+    next();
+};
+
+app.get('/admin/db-stats', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    const dbPath = path.join(__dirname, 'data/database.sqlite');
 
     fs.stat(dbPath, (err, stats) => {
         if (err) return res.status(404).json({ error: "DB not found" });
@@ -82,9 +110,37 @@ app.get('/admin/db-stats', authenticateJWT, isAdmin, (req, res) => {
     });
 });
 
-app.get('/admin/download-db', authenticateJWT, isAdmin, (req, res) => {
-    const liveDbPath = path.join(__dirname, 'app/data/database.sqlite');
-    const backupPath = path.join(__dirname, 'app/data/backup_temp.sqlite');
+app.get('/api/admin/tenants', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    try {
+        const tenants = db.prepare('SELECT id, name, active, endpoint, icon_url FROM tenants ORDER BY name ASC').all();
+        res.json(tenants);
+    } catch (error) {
+        console.error("Error fetching tenants:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.post('/api/admin/tenants', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    const { name, active, endpoint, icon_url } = req.body;
+    if (!name) return res.status(400).json({ error: "Tenant name is required" });
+
+    try {
+        const result = db.prepare(
+            'INSERT INTO tenants (name, active, endpoint, icon_url) VALUES (?, ?, ?, ?)'
+        ).run(name, active === false ? 0 : 1, endpoint || null, icon_url || null);
+        res.status(201).json({ success: true, tenantId: result.lastInsertRowid });
+    } catch (error) {
+        if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            return res.status(400).json({ error: "Tenant name already exists" });
+        }
+        console.error("Error creating tenant:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.get('/admin/download-db', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    const liveDbPath = path.join(__dirname, 'data/database.sqlite');
+    const backupPath = path.join(__dirname, 'data/backup_temp.sqlite');
 
     // 1. Connect to the live database
     const db = new sqlite3.Database(liveDbPath);
@@ -122,7 +178,7 @@ app.post("/api/login", (req, res) => {
     }
 
     const user = db.prepare(`
-        SELECT u.*, t.name as tenant_name 
+        SELECT u.*, t.name as tenant_name, t.icon_url 
         FROM users u 
         JOIN tenants t ON u.tenant_id = t.id 
         WHERE u.username = ? AND u.password = ?
@@ -143,7 +199,7 @@ app.post("/api/login", (req, res) => {
     // Fetch stores for this user's tenant
     const stores = db.prepare('SELECT id, name, lat, lng FROM stores WHERE tenant_id = ?').all(user.tenant_id);
 
-    res.json({ token, riderId, username, tenantId: user.tenant_id, tenantName: user.tenant_name, stores });
+    res.json({ token, riderId, username, tenantId: user.tenant_id, tenantName: user.tenant_name, iconUrl: user.icon_url, stores });
 });
 
 // Health check endpoint
@@ -163,7 +219,7 @@ app.get("/api/stores", authenticateJWT, isAdmin, (req, res) => {
 
 // POST /api/stores - Add a new store
 app.post("/api/stores", authenticateJWT, isAdmin, (req, res) => {
-    const { tenantId, name, lat, lng } = req.body;
+    const { tenantId, name, lat, lng, active } = req.body;
 
     if (!name) {
         return res.status(400).json({ error: "Store name is required" });
@@ -171,8 +227,8 @@ app.post("/api/stores", authenticateJWT, isAdmin, (req, res) => {
 
     try {
         const result = db.prepare(
-            'INSERT INTO stores (tenant_id, name, lat, lng) VALUES (?, ?, ?, ?)'
-        ).run(tenantId, name, lat || null, lng || null);
+            'INSERT INTO stores (tenant_id, name, lat, lng, active) VALUES (?, ?, ?, ?, ?)'
+        ).run(tenantId, name, lat || null, lng || null, active === false ? 0 : 1);
 
         res.status(201).json({
             success: true,
@@ -220,8 +276,24 @@ app.post("/api/location", authenticateJWT, (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/admin/stores', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    try {
+        const stores = db.prepare('SELECT id, name, tenant_id FROM stores ORDER BY name ASC').all();
+        res.json(stores);
+    } catch (error) {
+        console.error("Error fetching all stores:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
 // POST /api/riders - Add a new rider
-app.post("/api/riders", authenticateJWT, isAdmin, (req, res) => {
+app.post("/api/riders", authenticateJWT, (req, res, next) => {
+    // Custom check: Allow if regular Admin OR if Developer user
+    if (req.user.isAdmin || req.user.username === 'giacatec') {
+        return next();
+    }
+    return res.status(403).json({ error: "Unauthorized" });
+}, (req, res) => {
     const { username, password, storeId, isAdmin: newIsAdmin, tenantId } = req.body;
 
     if (!username || !password || !storeId) {
@@ -245,7 +317,7 @@ app.post("/api/riders", authenticateJWT, isAdmin, (req, res) => {
 // Serve static files (admin interface)
 app.use(express.static(path.join(__dirname, "public")));
 
-app.get("/admin/db", authenticateJWT, isAdmin, (req, res) => {
+app.get("/admin/db", authenticateJWT, isAdmin, isDeveloper, (req, res) => {
     res.sendFile(path.join(__dirname, "public", "db.html"));
 });
 

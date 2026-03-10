@@ -52,6 +52,10 @@
     <!-- Header -->
     <div class="header">
         <div class="header-left">
+            <div id="tenant-logo-block" class="tenant-logo-block" style="display: none;">
+                <img id="tenant-icon" src="" alt="Tenant Logo" class="tenant-icon">
+                <div class="brand-divider"></div>
+            </div>
             <div class="logo-container">
                 <img src="favicon.png" alt="RiderTracker" class="header-logo">
                 <h2>RiderTracker</h2>
@@ -84,6 +88,10 @@
                     <div class="settings-menu" id="settings-menu">
                         <div class="menu-item" id="menu-add-rider">
                             <span>➕ Agregar Repartidor</span>
+                        </div>
+                        <div class="menu-item" id="menu-db-admin" onclick="window.location.href='/admin/db'"
+                            style="display: none;">
+                            <span>📦 Dev Tools</span>
                         </div>
                         <div class="menu-item logout-option" id="menu-logout">
                             <span>🚪 Cerrar Sesión</span>
@@ -209,6 +217,24 @@
             }
         });
 
+        function updateTenantIcon(url) {
+            const block = document.getElementById("tenant-logo-block");
+            const img = document.getElementById("tenant-icon");
+            if (url && url.trim() !== "") {
+                img.src = url;
+                block.style.display = "flex";
+                localStorage.setItem("tenantIcon", url);
+            } else {
+                block.style.display = "none";
+                localStorage.removeItem("tenantIcon");
+            }
+        }
+
+        function handleAuthError() {
+            console.warn("Authentication required or token expired. Redirecting to login...");
+            handleLogout();
+        }
+
         // ============ SESSION PERSISTENCE ============
 
         window.addEventListener("DOMContentLoaded", () => {
@@ -220,6 +246,15 @@
                 document.getElementById("top-right-actions").style.display = "block";
                 document.querySelector(".header").style.display = "flex";
                 document.getElementById("persistent-rider-badge").style.display = "flex";
+
+                // Show developer options if username is 'giacatec'
+                if (localStorage.getItem("username") === 'giacatec') {
+                    document.getElementById("menu-db-admin").style.display = "block";
+                }
+
+                // Show tenant icon if exists
+                updateTenantIcon(localStorage.getItem("tenantIcon"));
+
                 initializeMap();
                 connectSocket();
                 fetchStores();
@@ -234,6 +269,12 @@
                 const response = await fetch(`${API_URL}/api/stores`, {
                     headers: { "Authorization": `Bearer ${authToken}` }
                 });
+
+                if (response.status === 401) {
+                    handleAuthError();
+                    return;
+                }
+
                 const stores = await response.json();
 
                 const storeSelect = document.getElementById("store-id");
@@ -298,6 +339,19 @@
                     authToken = data.token;
                     localStorage.setItem("adminToken", authToken);
                     localStorage.setItem("tenantId", data.tenantId);
+                    localStorage.setItem("username", data.username);
+
+                    // Set cookie for browser navigation protection
+                    document.cookie = `authToken=${authToken}; path=/; max-age=86400; SameSite=Strict`;
+
+                    // Update Tenant Icon
+                    updateTenantIcon(data.iconUrl);
+
+                    // Show developer options if username is 'giacatec'
+                    if (data.username === 'giacatec') {
+                        document.getElementById("menu-db-admin").style.display = "block";
+                    }
+
                     document.getElementById("login-container").classList.add("hidden");
                     document.getElementById("top-right-actions").style.display = "block";
                     document.querySelector(".header").style.display = "flex";
@@ -429,6 +483,11 @@
                     body: JSON.stringify({ username, password, storeId, tenantId }),
                 });
 
+                if (response.status === 401) {
+                    handleAuthError();
+                    return;
+                }
+
                 const data = await response.json();
                 if (data.success) {
                     feedback.textContent = "¡Repartidor creado con éxito!";
@@ -452,7 +511,12 @@
         function handleLogout() {
             authToken = null;
             localStorage.removeItem("adminToken");
+            localStorage.removeItem("username");
+            document.cookie = "authToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; SameSite=Strict";
             if (socket) socket.disconnect();
+            document.getElementById("menu-db-admin").style.display = "none";
+            document.getElementById("tenant-logo-block").style.display = "none";
+            localStorage.removeItem("tenantIcon");
             document.getElementById("login-container").classList.remove("hidden");
             document.getElementById("top-right-actions").style.display = "none";
             document.querySelector(".header").style.display = "none";

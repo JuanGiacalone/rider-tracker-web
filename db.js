@@ -18,9 +18,18 @@ function initDb() {
             name TEXT NOT NULL UNIQUE,
             active BOOLEAN DEFAULT 1,
             last_payment_date DATE,
-            endpoint TEXT
+            endpoint TEXT,
+            icon_url TEXT
         )
     `).run();
+
+    // Migration: Add icon_url to tenants if it doesn't exist
+    const tenantTableInfo = db.prepare("PRAGMA table_info(tenants)").all();
+    const hasIconUrl = tenantTableInfo.some(col => col.name === 'icon_url');
+    if (!hasIconUrl) {
+        console.log('[DB] Migrating tenants table to include icon_url...');
+        db.prepare("ALTER TABLE tenants ADD COLUMN icon_url TEXT").run();
+    }
 
     // Create stores table
     db.prepare(`

@@ -4,16 +4,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Database Export Tool</title>
-    <link rel="stylesheet" href="db-style.css">
+    <title>RT Dev Tools</title>
+    <link rel="icon" href="/favicon.png">
+    <link rel="stylesheet" href="/db-style.css">
 </head>
 
 <body>
     <div class="admin-container">
         <h2>System Administration</h2>
-        <p>Export the current state of the SQLite database.</p>
+
+        <button class="btn-secondary" onclick="window.location.href='/'">Back to Map</button>
 
         <div class="card">
+            <p>Export the current state of the SQLite database.</p>
             <div class="file-info">
                 <strong>File:</strong> <code>database.sqlite</code><br>
                 <strong>Last Modified:</strong> <span id="lastUpdated">Loading...</span><br>
@@ -22,8 +25,60 @@
             <button id="downloadBtn" class="btn-primary">Generate & Download</button>
             <p id="statusMessage"></p>
         </div>
+
+        <div class="card">
+            <h3>Add New Tenant</h3>
+            <form id="tenantForm" class="admin-form">
+                <input type="text" id="tenantName" placeholder="Tenant Name" required>
+                <input type="text" id="tenantEndpoint" placeholder="API Endpoint (Optional)">
+                <input type="text" id="tenantIconUrl" placeholder="Icon URL (PNG/JPG)(Optional)">
+                <label class="checkbox-row">
+                    <input type="checkbox" id="tenantActive" checked> Active
+                </label>
+                <button type="submit" class="btn-secondary">Create Tenant</button>
+                <p id="tenantStatus" class="status-small"></p>
+            </form>
+        </div>
+
+        <div class="card">
+            <h3>Add New Store</h3>
+            <form id="storeForm" class="admin-form">
+                <select id="tenantSelect" required>
+                    <option value="">Select Tenant</option>
+                </select>
+                <input type="text" id="storeName" placeholder="Store Name" required>
+                <div class="coord-row">
+                    <input type="number" step="any" id="storeLat" placeholder="Latitude (-38.xxx)">
+                    <input type="number" step="any" id="storeLng" placeholder="Longitude (-57.xxx)">
+                </div>
+                <label class="checkbox-row">
+                    <input type="checkbox" id="storeActive" checked> Active
+                </label>
+                <button type="submit" class="btn-secondary">Add Store</button>
+                <p id="storeStatus" class="status-small"></p>
+            </form>
+        </div>
+
+        <div class="card">
+            <h3>Add New Rider / Admin</h3>
+            <form id="riderForm" class="admin-form">
+                <select id="riderTenantSelect" required>
+                    <option value="">Select Tenant</option>
+                </select>
+                <select id="riderStoreSelect" required disabled>
+                    <option value="">Select Store</option>
+                </select>
+                <input type="text" id="riderUsername" placeholder="Username" required>
+                <input type="password" id="riderPassword" placeholder="Password" required>
+                <label class="checkbox-row">
+                    <input type="checkbox" id="riderIsAdmin"> Is Administrator
+                </label>
+                <button type="submit" class="btn-secondary">Add Rider/Admin</button>
+                <p id="riderStatus" class="status-small"></p>
+            </form>
+        </div>
     </div>
-    <script src="db-script.js"></script>
+    <script src="/db-script.js"></script>
 </body>
 
 </html>

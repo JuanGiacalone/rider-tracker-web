@@ -180,6 +180,25 @@ body {
     letter-spacing: -0.5px;
 }
 
+.tenant-logo-block {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.tenant-icon {
+    max-height: 40px;
+    max-width: 120px;
+    object-fit: contain;
+}
+
+.brand-divider {
+    width: 1.5px;
+    height: 30px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 1px;
+}
+
 .header-right {
     display: flex;
     align-items: center;
