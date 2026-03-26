@@ -74,24 +74,11 @@ function initDb() {
             rider_username TEXT NOT NULL,
             status TEXT DEFAULT 'active',
             customer_address TEXT,
-            amount REAL,
-            payment_method TEXT,
-            recipient_name TEXT,
             created_at INTEGER DEFAULT (unixepoch()),
             FOREIGN KEY (tenant_id) REFERENCES tenants(id),
             FOREIGN KEY (store_id) REFERENCES stores(id)
         )
     `).run();
-
-    // Migration: Add delivery detail columns if they don't exist
-    const deliveryTableInfo = db.prepare("PRAGMA table_info(deliveries)").all();
-    const hasAmount = deliveryTableInfo.some(col => col.name === 'amount');
-    if (!hasAmount) {
-        console.log('[DB] Migrating deliveries table to include detail columns...');
-        db.prepare("ALTER TABLE deliveries ADD COLUMN amount REAL").run();
-        db.prepare("ALTER TABLE deliveries ADD COLUMN payment_method TEXT").run();
-        db.prepare("ALTER TABLE deliveries ADD COLUMN recipient_name TEXT").run();
-    }
 
     // Migration: Add tenant_id to users if it doesn't exist
     const userTableInfo = db.prepare("PRAGMA table_info(users)").all();

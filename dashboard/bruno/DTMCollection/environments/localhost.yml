@@ -1,0 +1,8 @@
+name: localhost
+variables:
+  - name: baseUrl
+    value: http://localhost:3001
+  - name: user
+    value: admin
+  - secret: true
+    name: password
