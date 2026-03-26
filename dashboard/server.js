@@ -230,7 +230,7 @@ app.post("/api/deliveries", (req, res) => {
         return res.status(403).json({ error: "Unauthorized: Admin access required" });
     }
 
-    const { riderUsername, storeId, customerAddress, amount, paymentMethod, recipientName } = req.body;
+    const { riderUsername, storeId, customerAddress } = req.body;
 
     if (!riderUsername || !storeId) {
         return res.status(400).json({ error: "riderUsername and storeId are required" });
@@ -238,8 +238,8 @@ app.post("/api/deliveries", (req, res) => {
 
     try {
         const result = db.prepare(
-            'INSERT INTO deliveries (tenant_id, store_id, rider_username, customer_address, amount, payment_method, recipient_name) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(decoded.tenantId, storeId, riderUsername, customerAddress || null, amount || null, paymentMethod || null, recipientName || null);
+            'INSERT INTO deliveries (tenant_id, store_id, rider_username, customer_address) VALUES (?, ?, ?, ?)'
+        ).run(decoded.tenantId, storeId, riderUsername, customerAddress || null);
 
         const deliveryId = result.lastInsertRowid;
 
@@ -249,24 +249,6 @@ app.post("/api/deliveries", (req, res) => {
             activeDeliveryRiders.set(riderId, new Set());
         }
         activeDeliveryRiders.get(riderId).add(Number(deliveryId));
-
-        // Get store name for the notification
-        const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId);
-
-        // Notify the rider via WebSocket if they're connected
-        const riderSocket = userSockets.get(riderUsername);
-        if (riderSocket) {
-            riderSocket.emit('new-delivery', {
-                deliveryId: Number(deliveryId),
-                storeId,
-                storeName: store ? store.name : null,
-                customerAddress: customerAddress || null,
-                amount: amount || null,
-                paymentMethod: paymentMethod || null,
-                recipientName: recipientName || null,
-            });
-            console.log(`[Delivery] Notified rider ${riderUsername} of new delivery #${deliveryId}`);
-        }
 
         res.status(201).json({ success: true, deliveryId });
     } catch (error) {
@@ -337,9 +319,6 @@ app.post("/api/deliveries/:id/link", (req, res) => {
             storeLng: store ? store.lng : null,
             storeName: store ? store.name : null,
             tenantId: delivery.tenant_id,
-            recipientName: delivery.recipient_name || null,
-            amount: delivery.amount || null,
-            paymentMethod: delivery.payment_method || null,
             role: 'customer'
         },
         process.env.JWT_SECRET,

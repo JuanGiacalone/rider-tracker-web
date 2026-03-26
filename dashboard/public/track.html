@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>Seguimiento de Entrega - RiderTracker</title>
+    <meta name="description" content="Seguí tu pedido en tiempo real">
+    <link rel="icon" href="favicon.png">
+    <link rel="stylesheet" href="track.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+
+<body>
+    <!-- Loading Overlay -->
+    <div class="track-overlay" id="loading-overlay">
+        <div class="track-spinner"></div>
+        <div class="overlay-title">Conectando...</div>
+        <div class="overlay-message">Estableciendo conexión con el servidor de seguimiento</div>
+    </div>
+
+    <!-- Error Overlay -->
+    <div class="track-overlay hidden" id="error-overlay">
+        <div class="overlay-icon">⚠️</div>
+        <div class="overlay-title" id="error-title">Error</div>
+        <div class="overlay-message" id="error-message">No se pudo conectar</div>
+    </div>
+
+    <!-- Expired / Completed Overlay -->
+    <div class="track-overlay hidden" id="complete-overlay">
+        <div class="overlay-icon" id="complete-icon">✅</div>
+        <div class="overlay-title" id="complete-title">Entrega Completada</div>
+        <div class="overlay-message" id="complete-message">Tu pedido ha sido entregado exitosamente.</div>
+    </div>
+
+    <!-- Map -->
+    <div id="track-map"></div>
+
+    <!-- Status Bar (top) -->
+    <div class="track-status-bar" id="status-bar" style="display:none;">
+        <div class="track-title">
+            <img src="favicon.png" alt="RiderTracker">
+            <span>Seguimiento</span>
+        </div>
+        <div class="track-status">
+            <div class="status-dot connecting" id="track-status-dot"></div>
+            <span id="track-status-label">Conectando...</span>
+        </div>
+    </div>
+
+    <!-- Info Card (bottom) -->
+    <div class="track-info-card" id="info-card" style="display:none;">
+        <div class="delivery-status">
+            <span class="status-icon" id="delivery-status-icon">🏍️</span>
+            <span class="status-text active" id="delivery-status-text">Pedido en camino</span>
+        </div>
+        <div class="delivery-details">
+            <div class="detail-item">
+                <span>🏪</span>
+                <span id="store-name-label">-</span>
+            </div>
+            <div class="detail-item">
+                <span>🕐</span>
+                <span id="last-update-label">Esperando actualización...</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============ CONFIGURATION ============
+        const API_URL = window.location.origin;
+        const DEFAULT_LAT = -38.0055;
+        const DEFAULT_LNG = -57.5426;
+        const DEFAULT_ZOOM = 14;
+
+        // ============ STATE ============
+        let map = null;
+        let socket = null;
+        let riderMarker = null;
+        let storeMarker = null;
+        let customerMarker = null;
+        let deliveryInfo = null;
+        let isConnected = false;
+
+        // ============ INITIALIZATION ============
+
+        function init() {
+            const params = new URLSearchParams(window.location.search);
+            const token = params.get('token');
+
+            if (!token) {
+                showError('Link inválido', 'Este link de seguimiento no es válido. Contactá al comercio para obtener un nuevo link.');
+                return;
+            }
+
+            initMap();
+            connectSocket(token);
+            requestCustomerLocation();
+        }
+
+        function initMap() {
+            map = L.map('track-map', {
+                zoomControl: false,
+                attributionControl: false,
+            }).setView([DEFAULT_LAT, DEFAULT_LNG], DEFAULT_ZOOM);
+
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                maxZoom: 19,
+            }).addTo(map);
+        }
+
+        // ============ SOCKET CONNECTION ============
+
+        function connectSocket(token) {
+            socket = io(API_URL, {
+                auth: { token },
+                reconnection: true,
+                reconnectionDelay: 2000,
+                reconnectionDelayMax: 10000,
+                reconnectionAttempts: 10,
+            });
+
+            socket.on('connect', () => {
+                console.log('[Track] Connected');
+                isConnected = true;
+                updateConnectionStatus('connected', 'Conectado');
+                document.getElementById('loading-overlay').classList.add('hidden');
+                document.getElementById('status-bar').style.display = 'flex';
+                document.getElementById('info-card').style.display = 'block';
+            });
+
+            socket.on('disconnect', () => {
+                console.log('[Track] Disconnected');
+                isConnected = false;
+                updateConnectionStatus('connecting', 'Reconectando...');
+            });
+
+            socket.on('connect_error', (error) => {
+                console.error('[Track] Connection error:', error.message);
+                // Check if it's an auth error (token expired/invalid)
+                if (error.message && error.message.includes('unauthorized')) {
+                    showExpired('Link Expirado', 'Este link de seguimiento ha expirado. Contactá al comercio para obtener un nuevo link.');
+                }
+            });
+
+            socket.on('delivery-info', (info) => {
+                console.log('[Track] Delivery info:', info);
+                deliveryInfo = info;
+
+                // Show store name
+                document.getElementById('store-name-label').textContent = info.storeName || 'Sucursal';
+
+                // Place store marker
+                if (info.storeLat && info.storeLng) {
+                    const storeIcon = L.divIcon({
+                        html: '<div class="store-marker-icon">🏪</div>',
+                        className: 'custom-div-icon',
+                        iconSize: [32, 32],
+                        iconAnchor: [16, 16],
+                    });
+
+                    storeMarker = L.marker([info.storeLat, info.storeLng], { icon: storeIcon })
+                        .bindPopup(`<strong>${info.storeName || 'Sucursal'}</strong>`)
+                        .addTo(map);
+                }
+
+                fitMapBounds();
+            });
+
+            socket.on('rider-location', (data) => {
+                console.log('[Track] Rider location:', data);
+                updateRiderMarker(data);
+                updateLastUpdate(data.ts);
+                fitMapBounds();
+            });
+
+            socket.on('delivery-complete', (data) => {
+                console.log('[Track] Delivery complete:', data);
+                if (data.status === 'delivered') {
+                    showComplete('Entrega Completada', 'Tu pedido ha sido entregado exitosamente. ¡Buen provecho!', '✅');
+                } else {
+                    showExpired('Seguimiento Finalizado', 'El seguimiento de este pedido ha finalizado.');
+                }
+            });
+        }
+
+        // ============ MARKER MANAGEMENT ============
+
+        function updateRiderMarker(data) {
+            const { lat, lng } = data;
+
+            const riderIcon = L.divIcon({
+                html: '<div class="rider-marker-icon"><img src="moto.svg" alt="Rider"></div>',
+                className: 'custom-div-icon',
+                iconSize: [40, 40],
+                iconAnchor: [20, 20],
+            });
+
+            if (riderMarker) {
+                riderMarker.setLatLng([lat, lng]);
+            } else {
+                riderMarker = L.marker([lat, lng], { icon: riderIcon })
+                    .bindPopup('<strong>Tu repartidor</strong>')
+                    .addTo(map);
+            }
+        }
+
+        function requestCustomerLocation() {
+            if (!navigator.geolocation) return;
+
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+
+                    const customerIcon = L.divIcon({
+                        html: '<div class="customer-marker-icon">📍</div>',
+                        className: 'custom-div-icon',
+                        iconSize: [32, 32],
+                        iconAnchor: [16, 32],
+                    });
+
+                    customerMarker = L.marker([latitude, longitude], { icon: customerIcon })
+                        .bindPopup('<strong>Tu ubicación</strong>')
+                        .addTo(map);
+
+                    fitMapBounds();
+                },
+                (error) => {
+                    console.log('[Track] Geolocation not available:', error.message);
+                },
+                { enableHighAccuracy: false, timeout: 10000 }
+            );
+        }
+
+        function fitMapBounds() {
+            const points = [];
+            if (riderMarker) points.push(riderMarker.getLatLng());
+            if (storeMarker) points.push(storeMarker.getLatLng());
+            if (customerMarker) points.push(customerMarker.getLatLng());
+
+            if (points.length >= 2) {
+                const bounds = L.latLngBounds(points);
+                map.fitBounds(bounds, { padding: [60, 60], maxZoom: 16 });
+            } else if (points.length === 1) {
+                map.setView(points[0], DEFAULT_ZOOM);
+            }
+        }
+
+        // ============ UI UPDATES ============
+
+        function updateConnectionStatus(status, text) {
+            const dot = document.getElementById('track-status-dot');
+            const label = document.getElementById('track-status-label');
+            dot.className = `status-dot ${status}`;
+            label.textContent = text;
+        }
+
+        function updateLastUpdate(ts) {
+            const label = document.getElementById('last-update-label');
+            if (!ts) return;
+            const date = new Date(ts);
+            const hours = date.getHours().toString().padStart(2, '0');
+            const minutes = date.getMinutes().toString().padStart(2, '0');
+            label.textContent = `Última actualización: ${hours}:${minutes}`;
+        }
+
+        function showError(title, message) {
+            document.getElementById('loading-overlay').classList.add('hidden');
+            const overlay = document.getElementById('error-overlay');
+            overlay.classList.remove('hidden');
+            document.getElementById('error-title').textContent = title;
+            document.getElementById('error-message').textContent = message;
+        }
+
+        function showComplete(title, message, icon = '✅') {
+            document.getElementById('status-bar').style.display = 'none';
+            document.getElementById('info-card').style.display = 'none';
+            const overlay = document.getElementById('complete-overlay');
+            overlay.classList.remove('hidden');
+            document.getElementById('complete-icon').textContent = icon;
+            document.getElementById('complete-title').textContent = title;
+            document.getElementById('complete-message').textContent = message;
+
+            // Update bottom card
+            document.getElementById('delivery-status-icon').textContent = icon;
+            document.getElementById('delivery-status-text').textContent = title;
+            document.getElementById('delivery-status-text').className = 'status-text completed';
+        }
+
+        function showExpired(title, message) {
+            showComplete(title, message, '⏰');
+            document.getElementById('delivery-status-text').className = 'status-text expired';
+        }
+
+        // ============ START ============
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+
+</html>

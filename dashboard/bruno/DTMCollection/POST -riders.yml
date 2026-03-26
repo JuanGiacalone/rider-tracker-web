@@ -1,0 +1,28 @@
+info:
+  name: POST /riders
+  type: http
+  seq: 5
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/riders"
+  body:
+    type: json
+    data: |2-
+          {
+            
+            "username":"newadmin1",
+            "password": "newadmin",
+            "storeId": 1,
+            "isAdmin": 1,
+            "tenantId":1
+          }
+  auth:
+    type: bearer
+    token: "{{adminToken}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

@@ -146,25 +146,6 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="delivery-recipient">Nombre del destinatario</label>
-                    <input type="text" id="delivery-recipient" placeholder="Ej: Juan Pérez" required>
-                </div>
-                <div class="form-group" style="display:flex; gap:8px;">
-                    <div style="flex:1;">
-                        <label for="delivery-amount">Monto ($)</label>
-                        <input type="number" id="delivery-amount" placeholder="0.00" step="0.01" min="0" required>
-                    </div>
-                    <div style="flex:1;">
-                        <label for="delivery-payment">Método de pago</label>
-                        <select id="delivery-payment" class="form-input" required>
-                            <option value="Efectivo">Efectivo</option>
-                            <option value="Transferencia">Transferencia</option>
-                            <option value="MercadoPago">MercadoPago</option>
-                            <option value="Tarjeta">Tarjeta</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-group">
                     <label for="delivery-address">Dirección del cliente (opcional)</label>
                     <input type="text" id="delivery-address" placeholder="Ej: Av. Colón 1234">
                 </div>
@@ -175,15 +156,11 @@
             <div id="delivery-step-link" style="display:none;">
                 <p style="margin-bottom: 8px; color: #94A3B8; font-size: 13px;">Link de seguimiento generado:</p>
                 <div style="display:flex; gap:8px; align-items:center;">
-                    <input type="text" id="delivery-link-input" readonly
-                        style="flex:1; font-size:12px; padding:10px; background:#1E293B; border:1px solid #334155; color:#F1F5F9; border-radius:8px;">
-                    <button id="copy-link-btn" class="add-rider-btn"
-                        style="white-space:nowrap; padding: 10px 16px;">Copiar</button>
+                    <input type="text" id="delivery-link-input" readonly style="flex:1; font-size:12px; padding:10px; background:#1E293B; border:1px solid #334155; color:#F1F5F9; border-radius:8px;">
+                    <button id="copy-link-btn" class="add-rider-btn" style="white-space:nowrap; padding: 10px 16px;">Copiar</button>
                 </div>
                 <div id="copy-feedback" class="form-feedback" style="margin-top:8px;"></div>
-                <button id="new-delivery-btn" class="add-rider-btn"
-                    style="width:100%; margin-top:12px; background:#1E293B; border:1px solid #334155;">Crear otra
-                    entrega</button>
+                <button id="new-delivery-btn" class="add-rider-btn" style="width:100%; margin-top:12px; background:#1E293B; border:1px solid #334155;">Crear otra entrega</button>
             </div>
         </div>
     </div>
@@ -512,9 +489,6 @@
             e.preventDefault();
             const riderUsername = document.getElementById('delivery-rider').value.trim();
             const storeId = document.getElementById('delivery-store').value;
-            const recipientName = document.getElementById('delivery-recipient').value.trim();
-            const amount = parseFloat(document.getElementById('delivery-amount').value) || undefined;
-            const paymentMethod = document.getElementById('delivery-payment').value;
             const customerAddress = document.getElementById('delivery-address').value.trim();
 
             deliveryFeedback.textContent = 'Creando entrega...';
@@ -528,7 +502,7 @@
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${authToken}`
                     },
-                    body: JSON.stringify({ riderUsername, storeId: parseInt(storeId), customerAddress: customerAddress || undefined, amount, paymentMethod, recipientName: recipientName || undefined })
+                    body: JSON.stringify({ riderUsername, storeId: parseInt(storeId), customerAddress: customerAddress || undefined })
                 });
                 const createData = await createRes.json();
 
