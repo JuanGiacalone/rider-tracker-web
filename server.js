@@ -216,6 +216,27 @@ app.post("/api/riders", (req, res) => {
     }
 });
 
+// GET /api/riders - Get all riders for the tenant (for delivery assignment)
+app.get("/api/riders", (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+
+    const token = authHeader.split(" ")[1];
+    const decoded = verifyToken(token);
+
+    if (!decoded || !decoded.isAdmin) {
+        return res.status(403).json({ error: "Unauthorized: Admin access required" });
+    }
+
+    try {
+        const riders = db.prepare('SELECT id, username, store_id FROM users WHERE tenant_id = ? AND is_admin = 0 ORDER BY username ASC').all(decoded.tenantId);
+        res.json(riders);
+    } catch (error) {
+        console.error("Error fetching riders:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
 // ============ DELIVERY ENDPOINTS ============
 
 // POST /api/deliveries - Create a new delivery
