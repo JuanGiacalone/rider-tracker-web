@@ -56,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    let allTenants = [];
     let allStores = [];
 
     const fetchTenants = async () => {
@@ -71,11 +72,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const tenants = await response.json();
+            allTenants = tenants;
 
-            const tenantSelects = [document.getElementById('tenantSelect'), document.getElementById('riderTenantSelect')];
+            const tenantSelects = [
+                document.getElementById('tenantSelect'), 
+                document.getElementById('riderTenantSelect'),
+                document.getElementById('editTenantSelect')
+            ];
+            
             tenantSelects.forEach(sel => {
                 const currentValue = sel.value;
-                sel.innerHTML = '<option value="">Select Tenant</option>';
+                if (sel.id === 'editTenantSelect') {
+                    sel.innerHTML = '<option value="">Select Tenant to Edit</option>';
+                } else {
+                    sel.innerHTML = '<option value="">Select Tenant</option>';
+                }
                 tenants.forEach(t => {
                     const opt = document.createElement('option');
                     opt.value = t.id;
@@ -84,6 +95,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 sel.value = currentValue;
             });
+            
+            // Trigger change manually to re-fill edit form if an item was selected
+            document.getElementById('editTenantSelect').dispatchEvent(new Event('change'));
         } catch (err) {
             console.error("Error fetching tenants:", err);
         }
@@ -162,6 +176,81 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchTenants();
             } else {
                 status.textContent = data.error || "Failed to create tenant";
+                status.style.color = "red";
+            }
+        } catch (err) {
+            status.textContent = "Connection error";
+            status.style.color = "red";
+        }
+    });
+
+    document.getElementById('editTenantSelect').addEventListener('change', (e) => {
+        const tenantId = parseInt(e.target.value);
+        const endpointInput = document.getElementById('editTenantEndpoint');
+        const iconUrlInput = document.getElementById('editTenantIconUrl');
+        const activeCheck = document.getElementById('editTenantActive');
+        const submitBtn = document.getElementById('editTenantSubmit');
+
+        if (!tenantId) {
+            endpointInput.disabled = true;
+            iconUrlInput.disabled = true;
+            activeCheck.disabled = true;
+            submitBtn.disabled = true;
+            endpointInput.value = '';
+            iconUrlInput.value = '';
+            activeCheck.checked = false;
+            document.getElementById('editTenantStatus').textContent = '';
+            return;
+        }
+
+        const tenant = allTenants.find(t => t.id === tenantId);
+        if (tenant) {
+            endpointInput.value = tenant.endpoint || '';
+            iconUrlInput.value = tenant.icon_url || '';
+            activeCheck.checked = Boolean(tenant.active);
+            
+            endpointInput.disabled = false;
+            iconUrlInput.disabled = false;
+            activeCheck.disabled = false;
+            submitBtn.disabled = false;
+            document.getElementById('editTenantStatus').textContent = '';
+        }
+    });
+
+    document.getElementById('editTenantForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const status = document.getElementById('editTenantStatus');
+        const tenantId = document.getElementById('editTenantSelect').value;
+        const endpoint = document.getElementById('editTenantEndpoint').value;
+        const icon_url = document.getElementById('editTenantIconUrl').value;
+        const active = document.getElementById('editTenantActive').checked;
+        const token = localStorage.getItem('adminToken');
+
+        status.textContent = "Updating...";
+        status.style.color = "black";
+
+        try {
+            const response = await fetch(`/api/admin/tenants/${tenantId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ endpoint, icon_url, active })
+            });
+
+            if (response.status === 401) {
+                handleAuthError();
+                return;
+            }
+
+            const data = await response.json();
+            if (data.success) {
+                status.textContent = "Tenant updated!";
+                status.style.color = "green";
+                fetchTenants(); // Refresh data globally
+            } else {
+                status.textContent = data.error || "Failed to update tenant";
                 status.style.color = "red";
             }
         } catch (err) {

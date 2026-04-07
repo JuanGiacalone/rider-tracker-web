@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-const dbPath = path.join(__dirname, 'database.sqlite');
+const dbPath = path.join(__dirname, '/data/database.sqlite');
 const db = new Database(dbPath);
 
 // Enable foreign keys
@@ -15,9 +15,29 @@ function initDb() {
     db.prepare(`
         CREATE TABLE IF NOT EXISTS tenants (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
+            name TEXT NOT NULL UNIQUE,
+            active BOOLEAN DEFAULT 1,
+            last_payment_date TEXT,
+            endpoint TEXT,
+            icon_url TEXT
         )
     `).run();
+
+    // Migration: Add missing columns to tenants if they don't exist
+    const tenantTableInfo = db.prepare("PRAGMA table_info(tenants)").all();
+    const hasIconUrl = tenantTableInfo.some(col => col.name === 'icon_url');
+    if (!hasIconUrl) {
+        console.log('[DB] Migrating tenants table to include icon_url...');
+        db.prepare("ALTER TABLE tenants ADD COLUMN icon_url TEXT").run();
+    }
+    const hasActive = tenantTableInfo.some(col => col.name === 'active');
+    if (!hasActive) {
+        console.log('[DB] Migrating tenants table to include active, endpoint, last_payment_date...');
+        db.prepare("ALTER TABLE tenants ADD COLUMN active BOOLEAN DEFAULT 1").run();
+        db.prepare("ALTER TABLE tenants ADD COLUMN last_payment_date TEXT").run();
+        db.prepare("ALTER TABLE tenants ADD COLUMN endpoint TEXT").run();
+    }
+
 
     // Create stores table
     db.prepare(`
@@ -40,8 +60,8 @@ function initDb() {
         db.prepare("ALTER TABLE stores ADD COLUMN lng REAL").run();
 
         // Update default stores with coordinates near center
-        db.prepare("UPDATE stores SET lat = ?, lng = ? WHERE name = ?").run(-38.0055, -57.5426, 'Central Store');
-        db.prepare("UPDATE stores SET lat = ?, lng = ? WHERE name = ?").run(-37.9850, -57.5600, 'North Branch');
+        db.prepare("UPDATE stores SET lat = ?, lng = ? WHERE name = ?").run(-38.0055, -57.5426, 'Centro');
+        db.prepare("UPDATE stores SET lat = ?, lng = ? WHERE name = ?").run(-37.9850, -57.5600, 'Norte');
     }
 
     // Migration: Add tenant_id to stores if it doesn't exist
@@ -49,6 +69,12 @@ function initDb() {
     if (!hasTenantIdStores) {
         console.log('[DB] Migrating stores table to include tenant_id...');
         db.prepare("ALTER TABLE stores ADD COLUMN tenant_id INTEGER REFERENCES tenants(id)").run();
+    }
+
+    const hasActiveStore = tableInfo.some(col => col.name === 'active');
+    if (!hasActiveStore) {
+        console.log('[DB] Migrating stores table to include active...');
+        db.prepare("ALTER TABLE stores ADD COLUMN active BOOLEAN DEFAULT 1").run();
     }
 
     // Create users table
@@ -93,6 +119,14 @@ function initDb() {
         db.prepare("ALTER TABLE deliveries ADD COLUMN recipient_name TEXT").run();
     }
 
+    // Migration: Add lat/lng to deliveries if they don't exist
+    const hasLatDelivery = deliveryTableInfo.some(col => col.name === 'lat');
+    if (!hasLatDelivery) {
+        console.log('[DB] Migrating deliveries table to include coordinates...');
+        db.prepare("ALTER TABLE deliveries ADD COLUMN lat REAL").run();
+        db.prepare("ALTER TABLE deliveries ADD COLUMN lng REAL").run();
+    }
+
     // Migration: Add tenant_id to users if it doesn't exist
     const userTableInfo = db.prepare("PRAGMA table_info(users)").all();
     const hasTenantIdUsers = userTableInfo.some(col => col.name === 'tenant_id');
@@ -107,7 +141,7 @@ function initDb() {
     let defaultTenantId;
     if (tenantCount.count === 0) {
         console.log('[DB] Seeding default tenant...');
-        const result = db.prepare('INSERT INTO tenants (name) VALUES (?)').run('Lucciano');
+        const result = db.prepare('INSERT INTO tenants (name) VALUES (?)').run('Giacatec');
         defaultTenantId = result.lastInsertRowid;
     } else {
         defaultTenantId = db.prepare('SELECT id FROM tenants ORDER BY id ASC LIMIT 1').get().id;
@@ -118,8 +152,11 @@ function initDb() {
     if (storeCount.count === 0) {
         console.log('[DB] Seeding stores...');
         const insertStore = db.prepare('INSERT INTO stores (tenant_id, name, lat, lng) VALUES (?, ?, ?, ?)');
-        insertStore.run(defaultTenantId, 'Central Store', -38.0055, -57.5426);
-        insertStore.run(defaultTenantId, 'North Branch', -37.9850, -57.5600);
+        insertStore.run(defaultTenantId, 'Centro', -38.0055, -57.5426);
+        insertStore.run(defaultTenantId, 'Norte', -37.9850, -57.5600);
+        insertStore.run(defaultTenantId, 'Sur', -38.0055, -57.5426);
+        insertStore.run(defaultTenantId, 'Este', -37.9850, -57.5600);
+        insertStore.run(defaultTenantId, 'Oeste', -38.0055, -57.5426);
     }
 
     // Safety check: ensure existing stores have a tenant_id after migration
@@ -136,8 +173,11 @@ function initDb() {
             VALUES (?, ?, ?, ?, ?)
         `);
 
-        const centralStoreId = db.prepare('SELECT id FROM stores WHERE name = ?').get('Central Store').id;
-        const northBranchId = db.prepare('SELECT id FROM stores WHERE name = ?').get('North Branch').id;
+        const centralStoreRow = db.prepare('SELECT id FROM stores WHERE tenant_id = ? AND name = ?').get(defaultTenantId, 'Centro');
+        const northBranchRow = db.prepare('SELECT id FROM stores WHERE tenant_id = ? AND name = ?').get(defaultTenantId, 'Norte');
+
+        const centralStoreId = centralStoreRow ? centralStoreRow.id : null;
+        const northBranchId = northBranchRow ? northBranchRow.id : null;
 
         // Admin
         insertUser.run(
@@ -149,8 +189,8 @@ function initDb() {
         );
 
         // Riders
-        insertUser.run(defaultTenantId, 'rider1', 'password123', 0, centralStoreId);
-        insertUser.run(defaultTenantId, 'rider2@example.com', 'password123', 0, northBranchId);
+        insertUser.run(defaultTenantId, 'rider1', 'P1', 0, centralStoreId);
+        insertUser.run(defaultTenantId, 'norte', 'Norte', 0, northBranchId);
     }
 
     // Safety check: ensure existing users have a tenant_id after migration

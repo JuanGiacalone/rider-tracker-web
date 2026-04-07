@@ -41,6 +41,22 @@
         </div>
 
         <div class="card">
+            <h3>Edit Existing Tenant</h3>
+            <form id="editTenantForm" class="admin-form">
+                <select id="editTenantSelect" required>
+                    <option value="">Select Tenant to Edit</option>
+                </select>
+                <input type="text" id="editTenantEndpoint" placeholder="API Endpoint (Optional)" disabled>
+                <input type="text" id="editTenantIconUrl" placeholder="Icon URL (PNG/JPG)(Optional)" disabled>
+                <label class="checkbox-row">
+                    <input type="checkbox" id="editTenantActive" disabled> Active
+                </label>
+                <button type="submit" class="btn-secondary" id="editTenantSubmit" disabled>Update Tenant</button>
+                <p id="editTenantStatus" class="status-small"></p>
+            </form>
+        </div>
+
+        <div class="card">
             <h3>Add New Store</h3>
             <form id="storeForm" class="admin-form">
                 <select id="tenantSelect" required>

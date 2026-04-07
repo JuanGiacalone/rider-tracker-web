@@ -6,6 +6,8 @@ const jwt = require("jsonwebtoken");
 const helmet = require("helmet");
 const cors = require("cors");
 const path = require("path");
+const fs = require("fs");
+const sqlite3 = require("sqlite3");
 const db = require("./db");
 
 const app = express();
@@ -44,7 +46,151 @@ function verifyToken(token) {
     }
 }
 
+// Authentication Middleware
+
+const authenticateJWT = (req, res, next) => {
+
+    let token = null;
+    const authHeader = req.headers.authorization;
+
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+        token = authHeader.split(" ")[1];
+    }
+
+    if (!token && req.query.token) {
+        token = req.query.token;
+    }
+
+    if (!token && req.headers.cookie) {
+        const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
+            const [name, value] = cookie.trim().split('=');
+            acc[name] = value;
+            return acc;
+        }, {});
+        token = cookies.authToken;
+    }
+
+    if (!token) {
+        return res.status(401).json({ error: "Missing authorization header" });
+    }
+    const decoded = verifyToken(token);
+    if (!decoded) {
+        return res.status(401).json({ error: "Invalid token" });
+    }
+    req.user = decoded;
+    next();
+}
+
+const isAdmin = (req, res, next) => {
+    if (!req.user || !req.user.isAdmin) {
+        return res.status(403).json({ error: "Unauthorized: Admin access required" });
+    }
+    next();
+};
+
+// Developer Authorization Middleware (Restricts sensitive DB tools to 'giacatec')
+
+const isDeveloper = (req, res, next) => {
+    if (!req.user || req.user.username !== 'giacatec') {
+        return res.status(403).json({ error: "403" });
+    }
+    next();
+};
+
+
+
+
+
 // ============ REST API ENDPOINTS ============
+
+app.get('/admin/db-stats', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    const dbPath = path.join(__dirname, 'data/database.sqlite');
+
+    fs.stat(dbPath, (err, stats) => {
+        if (err) return res.status(404).json({ error: "DB not found" });
+
+        res.json({
+            lastModified: stats.mtime,
+            size: (stats.size / 1024 / 1024).toFixed(2) + " MB"
+        });
+    });
+});
+
+app.get('/api/admin/tenants', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    try {
+        const tenants = db.prepare('SELECT id, name, active, endpoint, icon_url FROM tenants ORDER BY name ASC').all();
+        res.json(tenants);
+    } catch (error) {
+        console.error("Error fetching tenants:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.post('/api/admin/tenants', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    const { name, active, endpoint, icon_url } = req.body;
+    if (!name) return res.status(400).json({ error: "Tenant name is required" });
+
+    try {
+        const result = db.prepare(
+            'INSERT INTO tenants (name, active, endpoint, icon_url) VALUES (?, ?, ?, ?)'
+        ).run(name, active === false ? 0 : 1, endpoint || null, icon_url || null);
+        res.status(201).json({ success: true, tenantId: result.lastInsertRowid });
+    } catch (error) {
+        if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            return res.status(400).json({ error: "Tenant name already exists" });
+        }
+        console.error("Error creating tenant:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.patch('/api/admin/tenants/:id', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    const tenantId = req.params.id;
+    const { active, endpoint, icon_url } = req.body;
+
+    try {
+        const result = db.prepare(
+            'UPDATE tenants SET active = ?, endpoint = ?, icon_url = ? WHERE id = ?'
+        ).run(active === false ? 0 : 1, endpoint || null, icon_url || null, tenantId);
+
+        if (result.changes === 0) {
+            return res.status(404).json({ error: "Tenant not found" });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Error updating tenant:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+app.get('/admin/download-db', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    const liveDbPath = path.join(__dirname, 'data/database.sqlite');
+    const backupPath = path.join(__dirname, 'data/backup_temp.sqlite');
+
+    // 1. Connect to the live database
+    const db = new sqlite3.Database(liveDbPath);
+
+    // 2. Run VACUUM INTO to create a consistent snapshot
+    // This safely ignores any active locks or WAL files
+    db.run(`VACUUM INTO ?`, [backupPath], (err) => {
+        db.close(); // Close connection to live DB
+
+        if (err) {
+            console.error(err);
+            return res.status(500).send("Backup failed.");
+        }
+
+        // 3. Serve the fresh snapshot
+        res.download(backupPath, 'database-backup.sqlite', (downloadErr) => {
+            // 4. Cleanup: Delete the temp file after download finishes
+            fs.unlink(backupPath, (unlinkErr) => {
+                if (unlinkErr) console.error("Cleanup error:", unlinkErr);
+            });
+        });
+    });
+});
+
 
 // Login endpoint
 app.post("/api/login", (req, res) => {
@@ -57,7 +203,7 @@ app.post("/api/login", (req, res) => {
     }
 
     const user = db.prepare(`
-        SELECT u.*, t.name as tenant_name 
+        SELECT u.*, t.name as tenant_name, t.icon_url 
         FROM users u 
         JOIN tenants t ON u.tenant_id = t.id 
         WHERE u.username = ? AND u.password = ?
@@ -78,7 +224,7 @@ app.post("/api/login", (req, res) => {
     // Fetch stores for this user's tenant
     const stores = db.prepare('SELECT id, name, lat, lng FROM stores WHERE tenant_id = ?').all(user.tenant_id);
 
-    res.json({ token, riderId, username, tenantId: user.tenant_id, tenantName: user.tenant_name, stores });
+    res.json({ token, riderId, username, tenantId: user.tenant_id, tenantName: user.tenant_name, iconUrl: user.icon_url, stores });
 });
 
 // Health check endpoint
@@ -86,7 +232,7 @@ app.get("/api/health", (req, res) => {
     res.json({ status: "ok", activeRiders: activeRiders.size });
 });
 
-app.get("/api/stores", (req, res) => {
+app.get("/api/stores", authenticateJWT, (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
 
@@ -107,18 +253,14 @@ app.get("/api/stores", (req, res) => {
 });
 
 // POST /api/stores - Add a new store
-app.post("/api/stores", (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+app.post("/api/stores", authenticateJWT, isAdmin, (req, res) => {
 
-    const token = authHeader.split(" ")[1];
-    const decoded = verifyToken(token);
-
-    if (!decoded || !decoded.isAdmin) {
-        return res.status(403).json({ error: "Unauthorized: Admin access required" });
+    const { name, lat, lng, active } = req.body;
+    let targetTenantId = req.user.tenantId;
+    
+    if (req.user.username === 'giacatec' && req.body.tenantId) {
+        targetTenantId = req.body.tenantId;
     }
-
-    const { tenantId, name, lat, lng } = req.body;
 
     if (!name) {
         return res.status(400).json({ error: "Store name is required" });
@@ -126,8 +268,8 @@ app.post("/api/stores", (req, res) => {
 
     try {
         const result = db.prepare(
-            'INSERT INTO stores (tenant_id, name, lat, lng) VALUES (?, ?, ?, ?)'
-        ).run(tenantId, name, lat || null, lng || null);
+            'INSERT INTO stores (tenant_id, name, lat, lng, active) VALUES (?, ?, ?, ?, ?)'
+        ).run(targetTenantId, name, lat || null, lng || null, active === false ? 0 : 1);
 
         res.status(201).json({
             success: true,
@@ -144,18 +286,10 @@ app.post("/api/stores", (req, res) => {
 });
 
 // POST /api/location - Background location updates
-app.post("/api/location", (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+app.post("/api/location", authenticateJWT, (req, res) => {
 
-    const token = authHeader.split(" ")[1];
-    const decoded = verifyToken(token);
 
-    if (!decoded) {
-        return res.status(401).json({ error: "Invalid token" });
-    }
-
-    const { riderId, tenantId, tenantName } = decoded;
+    const { riderId, tenantId, tenantName } = req.user;
     const { lat, lng, ts, storeId } = req.body;
 
     if (typeof lat !== "number" || typeof lng !== "number") {
@@ -185,6 +319,16 @@ app.post("/api/location", (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/admin/stores', authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    try {
+        const stores = db.prepare('SELECT id, name, tenant_id FROM stores ORDER BY name ASC').all();
+        res.json(stores);
+    } catch (error) {
+        console.error("Error fetching all stores:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
 // POST /api/riders - Add a new rider
 app.post("/api/riders", (req, res) => {
     const authHeader = req.headers.authorization;
@@ -196,15 +340,23 @@ app.post("/api/riders", (req, res) => {
     if (!decoded || !decoded.isAdmin) {
         return res.status(403).json({ error: "Unauthorized: Admin access required" });
     }
-    const { username, password, storeId, isAdmin, tenantId } = req.body;
+    const { username, password, storeId, isAdmin: setAdmin } = req.body;
+    
+    let targetTenantId = decoded.tenantId;
+    if (decoded.username === 'giacatec' && req.body.tenantId) {
+        targetTenantId = req.body.tenantId;
+    }
 
     if (!username || !password || !storeId) {
         return res.status(400).json({ error: "Username, password and storeId are required" });
     }
     try {
+        const storeCheck = db.prepare('SELECT id FROM stores WHERE id = ? AND tenant_id = ?').get(storeId, targetTenantId);
+        if (!storeCheck) return res.status(403).json({ error: "Invalid store or unauthorized for this tenant" });
+
         const result = db.prepare(
             'INSERT INTO users (tenant_id, username, password, is_admin, store_id) VALUES (?, ?, ?, ?, ?)'
-        ).run(tenantId, username, password, isAdmin ? 1 : 0, storeId);
+        ).run(targetTenantId, username, password, setAdmin ? 1 : 0, storeId);
 
         res.status(201).json({ success: true, userId: result.lastInsertRowid });
     } catch (error) {
@@ -251,16 +403,23 @@ app.post("/api/deliveries", (req, res) => {
         return res.status(403).json({ error: "Unauthorized: Admin access required" });
     }
 
-    const { riderUsername, storeId, customerAddress, amount, paymentMethod, recipientName } = req.body;
+    const { riderUsername, storeId, customerAddress, amount, paymentMethod, recipientName, customerLat, customerLng } = req.body;
 
     if (!riderUsername || !storeId) {
         return res.status(400).json({ error: "riderUsername and storeId are required" });
     }
+    
+    // Verify store and rider belong to this tenant
+    const storeCheck = db.prepare('SELECT id, name FROM stores WHERE id = ? AND tenant_id = ?').get(storeId, decoded.tenantId);
+    if (!storeCheck) return res.status(403).json({ error: "Invalid store or unauthorized for this tenant" });
+    
+    const riderCheck = db.prepare('SELECT id FROM users WHERE username = ? AND tenant_id = ?').get(riderUsername, decoded.tenantId);
+    if (!riderCheck) return res.status(403).json({ error: "Invalid rider or unauthorized for this tenant" });
 
     try {
         const result = db.prepare(
-            'INSERT INTO deliveries (tenant_id, store_id, rider_username, customer_address, amount, payment_method, recipient_name) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(decoded.tenantId, storeId, riderUsername, customerAddress || null, amount || null, paymentMethod || null, recipientName || null);
+            'INSERT INTO deliveries (tenant_id, store_id, rider_username, customer_address, amount, payment_method, recipient_name, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(decoded.tenantId, storeId, riderUsername, customerAddress || null, amount || null, paymentMethod || null, recipientName || null, customerLat || null, customerLng || null);
 
         const deliveryId = result.lastInsertRowid;
 
@@ -271,8 +430,8 @@ app.post("/api/deliveries", (req, res) => {
         }
         activeDeliveryRiders.get(riderId).add(Number(deliveryId));
 
-        // Get store name for the notification
-        const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId);
+        // Let storeName be fetched from storeCheck
+        const store = storeCheck;
 
         // Notify the rider via WebSocket if they're connected
         const riderSocket = userSockets.get(riderUsername);
@@ -285,9 +444,26 @@ app.post("/api/deliveries", (req, res) => {
                 amount: amount || null,
                 paymentMethod: paymentMethod || null,
                 recipientName: recipientName || null,
+                lat: customerLat || null,
+                lng: customerLng || null
             });
             console.log(`[Delivery] Notified rider ${riderUsername} of new delivery #${deliveryId}`);
         }
+
+        // Broadcast to tenant room so admins can see the delivery marker on map
+        io.to(decoded.tenantName).emit('delivery-created', {
+            id: Number(deliveryId),
+            store_id: storeId,
+            store_name: store ? store.name : null,
+            rider_username: riderUsername,
+            customer_address: customerAddress || null,
+            amount: amount || null,
+            payment_method: paymentMethod || null,
+            recipient_name: recipientName || null,
+            lat: customerLat || null,
+            lng: customerLng || null,
+            status: 'active'
+        });
 
         res.status(201).json({ success: true, deliveryId });
     } catch (error) {
@@ -413,6 +589,9 @@ app.patch("/api/deliveries/:id", (req, res) => {
         // Notify customer sockets in the delivery room
         io.to(`delivery:${deliveryId}`).emit('delivery-complete', { deliveryId, status });
 
+        // Notify admins to remove marker
+        io.to(decoded.tenantName).emit('delivery-finished', { deliveryId });
+
         res.json({ success: true });
     } catch (error) {
         console.error("Error updating delivery:", error);
@@ -422,6 +601,10 @@ app.patch("/api/deliveries/:id", (req, res) => {
 
 // Serve static files (admin interface)
 app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/admin/db", authenticateJWT, isAdmin, isDeveloper, (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "db.html"))
+})
 
 // ============ SOCKET.IO EVENTS ============
 

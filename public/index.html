@@ -53,6 +53,10 @@
     <!-- Header -->
     <div class="header">
         <div class="header-left">
+            <div id="tenant-logo-block" class="tenant-logo-block" style="display: none;">
+                <img id="tenant-icon" src="" alt="Tenant Logo" class="tenant-icon">
+                <div class="brand-divider"></div>
+            </div>
             <div class="logo-container">
                 <img src="favicon.png" alt="RiderTracker" class="header-logo">
                 <h2>RiderTracker</h2>
@@ -90,7 +94,7 @@
                             <span>➕ Agregar Repartidor</span>
                         </div>
                         <div class="menu-item" id="menu-db-admin" style="display: none;"
-                            onclick="window.location.href='db.html'">
+                            onclick="window.location.href='/admin/db'">
                             <span>🔧 Dev Tools</span>
                         </div>
                         <div class="menu-item logout-option" id="menu-logout">
@@ -140,7 +144,7 @@
             <!-- Step 1: Create Delivery -->
             <form id="delivery-form" class="delivery-step" id="delivery-step-create">
                 <div class="form-group">
-                    <label for="delivery-rider">Repartidor (usuario)</label>
+                    <label for="delivery-rider">Repartidor</label>
                     <select id="delivery-rider" class="form-input" required>
                         <option value="">Seleccione un repartidor</option>
                     </select>
@@ -229,6 +233,7 @@
         let socket = null;
         let riderMarkers = new Map(); // Map<riderId, {marker, storeId}>
         let storeMarkers = new Map(); // Map<storeId, marker>
+        let activeDeliveriesMarkers = new Map(); // Map<deliveryId, {marker, storeId}>
         let authToken = null;
         let isConnected = false;
         let currentStoreFilter = "all";
@@ -255,6 +260,20 @@
         }
 
         // ============ HEADER MANAGEMENT ============
+
+        function updateTenantIcon(url) {
+            const block = document.getElementById("tenant-logo-block");
+            const img = document.getElementById("tenant-icon");
+            if (url && url.trim() !== "") {
+                img.src = url;
+                block.style.display = "flex";
+                localStorage.setItem("tenantIcon", url);
+            } else {
+                block.style.display = "none";
+                localStorage.removeItem("tenantIcon");
+            }
+        }
+
 
         function showHeader() {
             const header = document.querySelector(".header");
@@ -292,9 +311,14 @@
                 document.getElementById("top-right-actions").style.display = "block";
                 document.querySelector(".header").style.display = "flex";
                 document.getElementById("persistent-rider-badge").style.display = "flex";
+
+                updateTenantIcon(localStorage.getItem("tenantIcon"));
+                isSuperAdmin(localStorage.getItem("username"));
+
                 initializeMap();
                 connectSocket();
                 fetchStores();
+                fetchDeliveries();
                 resetHeaderTimer(); // Start auto-hide
             }
         });
@@ -306,6 +330,11 @@
                 const response = await fetch(`${API_URL}/api/stores`, {
                     headers: { "Authorization": `Bearer ${authToken}` }
                 });
+
+                if (response.status === 401) {
+                    handleAuthError();
+                    return;
+                }
                 const stores = await response.json();
 
                 const storeSelect = document.getElementById("store-id");
@@ -349,7 +378,75 @@
             }
         }
 
+        async function fetchDeliveries() {
+            try {
+                const response = await fetch(`${API_URL}/api/deliveries`, {
+                    headers: { "Authorization": `Bearer ${authToken}` }
+                });
+                if (response.status === 401) return;
+                const deliveries = await response.json();
+                
+                // Clear existing
+                activeDeliveriesMarkers.forEach(data => {
+                    if (map.hasLayer(data.marker)) map.removeLayer(data.marker);
+                });
+                activeDeliveriesMarkers.clear();
+
+                deliveries.forEach(delivery => renderDeliveryMarker(delivery));
+            } catch (error) {
+                console.error("Error fetching deliveries:", error);
+            }
+        }
+
+        function renderDeliveryMarker(delivery) {
+            if (!delivery.lat || !delivery.lng) return;
+            
+            const houseIcon = L.divIcon({
+                html: '<div style="font-size: 24px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">🏠</div>',
+                className: 'custom-div-icon',
+                iconSize: [28, 28],
+                iconAnchor: [14, 14],
+                popupAnchor: [0, -14]
+            });
+
+            const popupContent = `
+                <div style="text-align:center;">
+                    <strong>Destino</strong><br>
+                    ${delivery.recipient_name || 'Sin nombre'}<br>
+                    ${delivery.customer_address || ''}
+                </div>
+            `;
+
+            const marker = L.marker([delivery.lat, delivery.lng], { icon: houseIcon })
+                .bindPopup(popupContent);
+
+            activeDeliveriesMarkers.set(String(delivery.id || delivery.deliveryId), { marker, storeId: delivery.store_id || delivery.storeId });
+            
+            // Check filters before adding to map
+            const targetStoreId = delivery.store_id || delivery.storeId;
+            const isVisible = currentStoreFilter === "all" || String(targetStoreId) === String(currentStoreFilter);
+            if (isVisible) {
+                marker.addTo(map);
+            }
+        }
+
+        function removeDeliveryMarker(deliveryId) {
+            const idStr = String(deliveryId);
+            if (activeDeliveriesMarkers.has(idStr)) {
+                const data = activeDeliveriesMarkers.get(idStr);
+                if (map.hasLayer(data.marker)) {
+                    map.removeLayer(data.marker);
+                }
+                activeDeliveriesMarkers.delete(idStr);
+            }
+        }
+
         // ============ AUTHENTICATION ============
+
+        function handleAuthError() {
+            console.warn("Authentication required or token expired. Redirecting to login...");
+            handleLogout();
+        }
 
         function isSuperAdmin(name) {
             if (name === 'giacatec') {
@@ -380,14 +477,21 @@
                     localStorage.setItem("adminToken", authToken);
                     localStorage.setItem("tenantId", data.tenantId);
                     localStorage.setItem("username", data.username);
+
+                    // Set cookie for browser navigation protection
+                    document.cookie = `authToken=${authToken}; path=/; max-age=86400; SameSite=Strict`;
+
                     document.getElementById("login-container").classList.add("hidden");
                     document.getElementById("top-right-actions").style.display = "block";
                     document.querySelector(".header").style.display = "flex";
                     document.getElementById("persistent-rider-badge").style.display = "flex";
+
+                    updateTenantIcon(localStorage.getItem("tenantIcon"));
                     isSuperAdmin(data.username);
                     initializeMap();
                     connectSocket();
                     fetchStores();
+                    fetchDeliveries();
                     resetHeaderTimer(); // Start auto-hide
                 } else {
                     document.getElementById("login-error").textContent = "Error de autenticación";
@@ -397,6 +501,12 @@
                 document.getElementById("login-error").textContent = "Error de conexión";
             }
         });
+
+        // Auto-fill username if available in localStorage
+        const savedUsername = localStorage.getItem("username");
+        if (savedUsername) {
+            document.getElementById("username").value = savedUsername;
+        }
 
         // ============ RIDER MANAGEMENT UI ============
 
@@ -449,6 +559,16 @@
                     if (!map.hasLayer(marker)) marker.addTo(map);
                 } else {
                     if (map.hasLayer(marker)) map.removeLayer(marker);
+                }
+            });
+
+            // Sync delivery markers with filter
+            activeDeliveriesMarkers.forEach((data, deliveryId) => {
+                const isVisible = currentStoreFilter === "all" || String(data.storeId) === String(currentStoreFilter);
+                if (isVisible) {
+                    if (!map.hasLayer(data.marker)) data.marker.addTo(map);
+                } else {
+                    if (map.hasLayer(data.marker)) map.removeLayer(data.marker);
                 }
             });
         }
@@ -524,11 +644,11 @@
                     select.appendChild(option);
                 }
             });
-            
+
             if (currentStoreFilter !== 'all') {
                 select.value = currentStoreFilter;
             }
-            
+
             select.onchange = renderDeliveryRiders;
         }
 
@@ -553,9 +673,9 @@
         function renderDeliveryRiders() {
             const select = document.getElementById('delivery-rider');
             const storeId = document.getElementById('delivery-store').value;
-            
+
             select.innerHTML = '<option value="">Seleccione un repartidor</option>';
-            
+
             deliveryRidersCache.forEach(rider => {
                 // Si la sucursal de entrega está seleccionada, filtrar los riders. Si no, mostrar todos.
                 if (!storeId || String(rider.store_id) === String(storeId)) {
@@ -579,6 +699,28 @@
             deliveryFeedback.textContent = 'Creando entrega...';
             deliveryFeedback.className = 'form-feedback';
 
+            let customerLat = undefined;
+            let customerLng = undefined;
+
+            if (customerAddress) {
+                deliveryFeedback.textContent = 'Geocodificando dirección...';
+                try {
+                    const encodedAddress = encodeURIComponent(customerAddress);
+                    // OpenStreetMap Nominatim API
+                    const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedAddress}&addressdetails=1`;
+                    const res = await fetch(nominatimUrl);
+                    const data = await res.json();
+                    if (data && data.length > 0) {
+                        customerLat = parseFloat(data[0].lat);
+                        customerLng = parseFloat(data[0].lon);
+                    }
+                } catch (err) {
+                    console.warn("Geocoding failed:", err);
+                }
+            }
+
+            deliveryFeedback.textContent = 'Creando entrega...';
+
             try {
                 // Step 1: Create delivery
                 const createRes = await fetch(`${API_URL}/api/deliveries`, {
@@ -587,7 +729,7 @@
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${authToken}`
                     },
-                    body: JSON.stringify({ riderUsername, storeId: parseInt(storeId), customerAddress: customerAddress || undefined, amount, paymentMethod, recipientName: recipientName || undefined })
+                    body: JSON.stringify({ riderUsername, storeId: parseInt(storeId), customerAddress: customerAddress || undefined, amount, paymentMethod, recipientName: recipientName || undefined, customerLat, customerLng })
                 });
                 const createData = await createRes.json();
 
@@ -682,6 +824,11 @@
                     body: JSON.stringify({ username, password, storeId, tenantId }),
                 });
 
+                if (response.status === 401) {
+                    handleAuthError();
+                    return;
+                }
+
                 const data = await response.json();
                 if (data.success) {
                     feedback.textContent = "¡Repartidor creado con éxito!";
@@ -714,6 +861,7 @@
             if (map) map.remove();
             riderMarkers.clear();
             storeMarkers.clear();
+            activeDeliveriesMarkers.clear();
         }
 
         // ============ MAP INITIALIZATION ============
@@ -747,6 +895,14 @@
                 isConnected = true;
                 updateStatus("Conectado", "connected");
                 hideSpinner();
+            });
+
+            socket.on('delivery-created', (delivery) => {
+                renderDeliveryMarker(delivery);
+            });
+
+            socket.on('delivery-finished', ({ deliveryId }) => {
+                removeDeliveryMarker(deliveryId);
             });
 
             socket.on("disconnect", () => {
